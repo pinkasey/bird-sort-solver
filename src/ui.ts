@@ -1,18 +1,41 @@
 import { exposedBird } from './puzzle'
-import type { Bird, Branch, Move, PuzzleState } from './types'
+import type { Bird, Branch, Move, PuzzleState, Side } from './types'
 
-export function renderState(target: HTMLElement, state: PuzzleState): void {
+export interface RenderOptions {
+    readonly editable?: boolean
+    readonly birdTypes?: ReadonlyArray<string>
+    readonly newTypeValue?: string
+    readonly newTypeLabel?: string
+    readonly onRowChange?: (detail: RowChangeDetail) => void
+    readonly onNewType?: () => string | null
+}
+
+export interface RowChangeDetail {
+    readonly side: Side
+    readonly branchIndex: number
+    readonly values: string[]
+}
+
+export function renderState(
+    target: HTMLElement,
+    state: PuzzleState,
+    options: RenderOptions = {}
+): void {
   target.innerHTML = ''
   const board = document.createElement('div')
   board.className = 'board'
 
-  board.appendChild(renderColumn('left', state.left))
-  board.appendChild(renderColumn('right', state.right))
+    board.appendChild(renderColumn('left', state.left, options))
+    board.appendChild(renderColumn('right', state.right, options))
 
   target.append(board)
 }
 
-function renderColumn(side: 'left' | 'right', branches: ReadonlyArray<Branch>) {
+function renderColumn(
+    side: Side,
+    branches: ReadonlyArray<Branch>,
+    options: RenderOptions
+) {
   const column = document.createElement('section')
   column.className = `column column-${side}`
   const heading = document.createElement('h2')
@@ -27,14 +50,18 @@ function renderColumn(side: 'left' | 'right', branches: ReadonlyArray<Branch>) {
     return column
   }
 
-  branches.forEach((branch) => {
-    column.append(renderBranch(branch))
+    branches.forEach((branch, index) => {
+        column.append(renderBranch(branch, index, options))
   })
 
   return column
 }
 
-function renderBranch(branch: Branch): HTMLElement {
+function renderBranch(
+    branch: Branch,
+    branchIndex: number,
+    options: RenderOptions
+): HTMLElement {
   const branchEl = document.createElement('article')
   branchEl.className = `branch branch-${branch.side}`
 
@@ -46,42 +73,76 @@ function renderBranch(branch: Branch): HTMLElement {
   const slots = document.createElement('div')
   slots.className = 'slots'
 
-  const movableIndex = getMovableIndex(branch)
-    const slotBirds: Array<Bird | undefined> = new Array(branch.capacity).fill(
-        undefined
-    )
-
-    if (branch.side === 'left') {
-        branch.birds.forEach((bird, index) => {
-            slotBirds[index] = bird
-        })
-    } else {
-        const startIndex = branch.capacity - branch.birds.length
-        branch.birds.forEach((bird, index) => {
-            slotBirds[startIndex + index] = bird
-        })
-    }
-
+    const layout = computeSlotLayout(branch)
+    const movableIndex = getMovableIndex(branch)
     const movableSlotIndex =
         movableIndex === null
             ? null
-            : branch.side === 'left'
-                ? movableIndex
-                : branch.capacity - branch.birds.length + movableIndex
+            : layout.indices.findIndex((index) => index === movableIndex)
 
-  for (let i = 0; i < branch.capacity; i += 1) {
-      const bird = slotBirds[i]
+    const selects: HTMLSelectElement[] = []
+
+    for (let i = 0; i < branch.capacity; i += 1) {
     const slot = document.createElement('div')
     slot.classList.add('slot')
-    if (bird === undefined) {
+
+      if (layout.values[i] === undefined) {
       slot.classList.add('slot-empty')
     } else {
       slot.classList.add('slot-filled')
-      slot.textContent = bird
-        if (i === movableSlotIndex) {
-        slot.classList.add('slot-movable')
+          if (movableSlotIndex !== null && i === movableSlotIndex) {
+              slot.classList.add('slot-movable')
+          }
+      }
+
+      if (options.editable) {
+          slot.classList.add('slot-editable')
+          const select = document.createElement('select')
+          select.className = 'structured-slot slot-editor'
+          populateSelectOptions(select, layout.values[i], options)
+          selects.push(select)
+          slot.append(select)
+
+          let previousValue = select.value
+
+          select.addEventListener('change', () => {
+              let currentValue = select.value
+              if (
+                  options.newTypeValue &&
+                  currentValue === options.newTypeValue &&
+                  options.onNewType
+              ) {
+                  const newType = options.onNewType()
+                  if (newType) {
+                      ensureSelectHasOption(select, newType)
+                      currentValue = newType
+                      select.value = newType
+                  } else {
+                      select.value = previousValue
+                      return
+                  }
+              }
+
+              previousValue = select.value
+
+              if (options.onRowChange) {
+                  const rowValues = selects.map((item) =>
+                      item.value === options.newTypeValue ? '' : item.value
+                  )
+                  options.onRowChange({
+                      side: branch.side,
+                      branchIndex,
+                      values: rowValues,
+                  })
+              }
+          })
+      } else {
+          const bird = layout.values[i]
+          if (bird !== undefined) {
+          slot.textContent = bird
       }
     }
+
     slots.append(slot)
   }
 
@@ -95,6 +156,76 @@ function getMovableIndex(branch: Branch): number | null {
     return null
   }
   return branch.side === 'left' ? branch.birds.length - 1 : 0
+}
+
+function computeSlotLayout(branch: Branch) {
+    const values: Array<Bird | undefined> = new Array(branch.capacity).fill(
+        undefined
+    )
+    const indices: number[] = new Array(branch.capacity).fill(-1)
+
+    if (branch.side === 'left') {
+        branch.birds.forEach((bird, index) => {
+            if (index < branch.capacity) {
+                values[index] = bird
+                indices[index] = index
+            }
+        })
+    } else {
+        const startIndex = branch.capacity - branch.birds.length
+        branch.birds.forEach((bird, index) => {
+            const slotIndex = startIndex + index
+            if (slotIndex >= 0 && slotIndex < branch.capacity) {
+                values[slotIndex] = bird
+                indices[slotIndex] = index
+            }
+        })
+    }
+
+    return { values, indices }
+}
+
+function populateSelectOptions(
+    select: HTMLSelectElement,
+    current: Bird | undefined,
+    options: RenderOptions
+): void {
+    select.innerHTML = ''
+
+    const blankOption = new Option('— empty —', '')
+    select.add(blankOption)
+
+    const types = [...(options.birdTypes ?? [])]
+    if (current && !types.includes(current)) {
+        types.push(current)
+    }
+
+    types.forEach((type) => {
+        if (type.trim().length === 0) {
+            return
+        }
+        select.add(new Option(type, type))
+    })
+
+    if (options.newTypeValue && options.newTypeLabel) {
+        select.add(new Option(options.newTypeLabel, options.newTypeValue))
+    }
+
+    if (current) {
+        select.value = current
+    } else {
+        select.value = ''
+    }
+}
+
+function ensureSelectHasOption(select: HTMLSelectElement, value: string): void {
+    const hasOption = Array.from(select.options).some(
+        (option) => option.value === value
+    )
+    if (!hasOption) {
+        const option = new Option(value, value)
+        select.add(option, select.options.length - 1)
+    }
 }
 
 export function renderMoves(
