@@ -1,5 +1,5 @@
 import { exposedBird } from './puzzle'
-import type { Branch, Move, PuzzleState } from './types'
+import type { Bird, Branch, Move, PuzzleState } from './types'
 
 export function renderState(target: HTMLElement, state: PuzzleState): void {
   target.innerHTML = ''
@@ -47,9 +47,30 @@ function renderBranch(branch: Branch): HTMLElement {
   slots.className = 'slots'
 
   const movableIndex = getMovableIndex(branch)
+    const slotBirds: Array<Bird | undefined> = new Array(branch.capacity).fill(
+        undefined
+    )
+
+    if (branch.side === 'left') {
+        branch.birds.forEach((bird, index) => {
+            slotBirds[index] = bird
+        })
+    } else {
+        const startIndex = branch.capacity - branch.birds.length
+        branch.birds.forEach((bird, index) => {
+            slotBirds[startIndex + index] = bird
+        })
+    }
+
+    const movableSlotIndex =
+        movableIndex === null
+            ? null
+            : branch.side === 'left'
+                ? movableIndex
+                : branch.capacity - branch.birds.length + movableIndex
 
   for (let i = 0; i < branch.capacity; i += 1) {
-    const bird = branch.birds[i]
+      const bird = slotBirds[i]
     const slot = document.createElement('div')
     slot.classList.add('slot')
     if (bird === undefined) {
@@ -57,7 +78,7 @@ function renderBranch(branch: Branch): HTMLElement {
     } else {
       slot.classList.add('slot-filled')
       slot.textContent = bird
-      if (i === movableIndex) {
+        if (i === movableSlotIndex) {
         slot.classList.add('slot-movable')
       }
     }
